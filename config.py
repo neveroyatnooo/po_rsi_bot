@@ -19,4 +19,9 @@ RSI_UPPER       = 70
 RSI_LOWER       = 30
 EXPIRATION_MIN  = 2
 
+USE_PROXY    = False
+PROXY_ADDR   = "127.0.0.1"
+PROXY_PORT   = 1080
+
+
 
