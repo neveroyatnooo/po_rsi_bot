@@ -9,9 +9,15 @@ import pandas as pd
 from ta.momentum import RSIIndicator
 from telegram import Bot
 import socketio
+import requests
+
 import config
 
-# 1) Настроим логирование
+# Отключаем предупреждения про незаверенный SSL
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# Настройка логов
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -19,13 +25,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger()
 
-# 2) Телеграм-бот
+# Инициализируем Telegram-бота
 bot = Bot(token=config.TELEGRAM_TOKEN)
 
-# 3) Socket.IO клиент: только WebSocket-транспорт
-sio = socketio.Client(transports=["websocket"])
+# Готовим HTTP-сессию (если понадобится polling fallback)
+session = requests.Session()
+session.verify = False
 
-# 4) Храним последние 1-мин свечи и уже посланные сигналы
+# Создаем Socket.IO-клиент (без передачи transports в конструктор)
+sio = socketio.Client(http_session=session)
+
+# Храним историю свечей и уже отправленные сигналы
 hist = {pair: deque(maxlen=100) for pair in config.OTC_PAIRS}
 sent_signals = set()
 
@@ -65,7 +75,7 @@ def on_new_candle(pair: str, candle: dict):
             except Exception as e:
                 logger.error("Telegram error: %s", e)
 
-# 5) Socket.IO handlers
+# --- Socket.IO handlers ---
 
 @sio.event
 def connect():
@@ -89,15 +99,15 @@ def on_auth(data):
 
 @sio.on("candle")
 def on_candle(msg):
-    instr = msg.get("instrument")
-    if instr in config.OTC_PAIRS and msg.get("timeframe") == 60:
-        on_new_candle(instr, msg.get("candle", {}))
+    inst = msg.get("instrument")
+    if inst in config.OTC_PAIRS and msg.get("timeframe") == 60:
+        on_new_candle(inst, msg.get("candle", {}))
 
 @sio.event
 def disconnect():
     logger.warning("🔴 Disconnected from PO")
 
-# 6) Запуск WebSocket-соединения
+# Запуск WebSocket-соединения с указанием транспорта только при connect()
 def start_ws():
     url = f"https://{config.PO_SOCKET_HOST}"
     sio.connect(
