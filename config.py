@@ -19,8 +19,8 @@ RSI_UPPER       = 70
 RSI_LOWER       = 30
 EXPIRATION_MIN  = 2
 
-PO_SOCKET_HOST = "api-spb.po.market"
-PO_SOCKET_PATH = "api/socket.io"
+PO_SOCKET_HOST = "demo-api-eu.po.market"
+PO_SOCKET_PATH = "socket.io"
 
 
 
