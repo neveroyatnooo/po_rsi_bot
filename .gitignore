@@ -1,0 +1,9 @@
+# виртуальное окружение
+venv/
+po_bot_env/
+__pycache__/
+*.pyc
+
+# секретные конфиги
+config.py
+.env
