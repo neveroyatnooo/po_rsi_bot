@@ -14,10 +14,10 @@ import requests
 
 import config
 
-# отключаем ворнинги SSL
+# отключаем ворнинги про незверифицированный SSL
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# 1) Логирование
+# 1) логирование
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -25,25 +25,21 @@ logging.basicConfig(
 )
 logger = logging.getLogger()
 
-# 2) Инициализируем Telegram-бота
+# 2) инициализируем Telegram-бота
 bot = Bot(token=config.TELEGRAM_TOKEN)
 
-# 3) HTTP-сессия для Engine.IO-polling (без проверки SSL)
+# 3) готовим HTTP-сессию для Engine.IO polling (без проверки SSL)
 session = requests.Session()
 session.verify = False
 
-# 4) Socket.IO-клиент
+# 4) создаём Socket.IO-клиент, передаём ему нашу session
 sio = socketio.Client(http_session=session)
 
-# 5) История свечей и множество уже отправленных сигналов
+# 5) для стратегии: храним последние 1-мин свечи и историю сигналов
 hist = {pair: deque(maxlen=100) for pair in config.OTC_PAIRS}
 sent_signals = set()
 
 def on_new_candle(pair: str, candle: dict):
-    """
-    Добавляем новую минутную свечу, считаем RSI(7/14/21),
-    если все три >RSI_UPPER → DOWN, <RSI_LOWER → UP.
-    """
     dq = hist[pair]
     dq.append({
         "time":  candle["from"],
@@ -52,6 +48,7 @@ def on_new_candle(pair: str, candle: dict):
         "low":   candle["low"],
         "close": candle["close"],
     })
+    # ждём минимум max_period+1 свечу
     if len(dq) < max(config.RSI_PERIODS) + 1:
         return
 
@@ -64,12 +61,13 @@ def on_new_candle(pair: str, candle: dict):
         elif rsi < config.RSI_LOWER:
             dirs.append("UP")
         else:
-            return  # хотя бы один в нейтрали — отменяем
+            return  # хотя бы один RSI в зоне 30–70 — отменяем
 
+    # все три сигнала совпали?
     if all(d == dirs[0] for d in dirs):
         text = "Вниз" if dirs[0] == "DOWN" else "Вверх"
-        ts = df["time"].iloc[-1]
-        key = (pair, ts, text)
+        ts   = df["time"].iloc[-1]
+        key  = (pair, ts, text)
         if key not in sent_signals:
             sent_signals.add(key)
             msg = f"{pair} | экспирация {config.EXPIRATION_MIN} мин | {text}"
@@ -79,11 +77,11 @@ def on_new_candle(pair: str, candle: dict):
             except Exception as e:
                 logger.error("Telegram error: %s", e)
 
-# --- Socket.IO handlers ---
+# --- обработчики socket.io ---
 
 @sio.event
 def connect():
-    logger.info("🟢 Connected to %s (polling)", config.PO_SOCKET_HOST)
+    logger.info("🟢 Connected to %s (polling)…", config.PO_SOCKET_HOST)
     sio.emit("authenticate", {
         "email":    config.PO_EMAIL,
         "password": config.PO_PASSWORD
@@ -103,29 +101,33 @@ def on_auth(data):
 
 @sio.on("candle")
 def on_candle(msg):
-    instr = msg.get("instrument")
-    if instr in config.OTC_PAIRS and msg.get("timeframe") == 60:
-        on_new_candle(instr, msg.get("candle", {}))
+    inst = msg.get("instrument")
+    if inst in config.OTC_PAIRS and msg.get("timeframe") == 60:
+        on_new_candle(inst, msg.get("candle", {}))
 
 @sio.event
 def disconnect():
     logger.warning("🔴 Disconnected from PO")
 
-# 7) Старт Engine.IO polling
 def start_polling():
+    """
+    Собираем URL вида:
+    https://api-spb.po.market/api/socket.io/
+    и запускаем Engine.IO polling
+    """
     url = f"https://{config.PO_SOCKET_HOST}"
     sio.connect(
         url,
         transports=["polling"],
         headers={"Origin": "https://pocketoption.com"},
-        socketio_path="socket.io"
+        socketio_path=config.PO_SOCKET_PATH
     )
     sio.wait()
 
 if __name__ == "__main__":
-    # запускаем в фоне
+    # запускаем polling в фоне
     threading.Thread(target=start_polling, daemon=True).start()
-    logger.info("🤖 Bot is running. Ctrl+C to stop.")
+    logger.info("🤖 Bot is running. Press Ctrl+C to stop.")
     try:
         while True:
             time.sleep(1)
