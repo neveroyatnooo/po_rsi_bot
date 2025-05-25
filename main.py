@@ -1,5 +1,13 @@
 # main.py
 
+# ── Monkey-patch Engine.IO & Socket.IO disconnect handlers ───────────────
+import engineio.client
+engineio.client.BaseClient._handle_eio_disconnect = lambda self, *args: None
+
+import socketio.client
+socketio.client.Client._handle_eio_disconnect = lambda self, *args: None
+
+# ── Импорты остального функционала ───────────────────────────────────────
 import time
 import logging
 import threading
@@ -12,11 +20,11 @@ import socketio
 import requests
 import config
 
-# отключаем InsecureRequestWarning
+# отключаем InsecureRequestWarning при verify=False
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# ——— логирование ——————————————————————————————————————————
+# ── Логирование ───────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -24,22 +32,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger()
 
-# ——— Telegram-бот ————————————————————————————————————————
+# ── Telegram Bot ─────────────────────────────────────────────────────────
 bot = Bot(token=config.TELEGRAM_TOKEN)
 
-# ——— HTTP-сессия (на всякий случай) —————————————————————————
+# ── HTTP-сессия (для polling fallback, если понадобится) ───────────────────
 session = requests.Session()
 session.verify = False
 
-# ——— Socket.IO клиент ——————————————————————————————————————
-# Без transports в конструкторе
+# ── Socket.IO клиент ─────────────────────────────────────────────────────
 sio = socketio.Client(http_session=session)
 
-# ——— структура для сигналов ——————————————————————————————
+# ── Храним свечи и уже отправленные сигналы ──────────────────────────────
 hist = {pair: deque(maxlen=100) for pair in config.OTC_PAIRS}
 sent_signals = set()
 
-# ——— логика сигнала ———————————————————————————————————————
 def on_new_candle(pair: str, candle: dict):
     dq = hist[pair]
     dq.append({
@@ -55,10 +61,10 @@ def on_new_candle(pair: str, candle: dict):
     df = pd.DataFrame(dq)
     dirs = []
     for p in config.RSI_PERIODS:
-        val = RSIIndicator(df["close"], window=p).rsi().iloc[-1]
-        if val > config.RSI_UPPER:
+        r = RSIIndicator(df["close"], window=p).rsi().iloc[-1]
+        if r > config.RSI_UPPER:
             dirs.append("DOWN")
-        elif val < config.RSI_LOWER:
+        elif r < config.RSI_LOWER:
             dirs.append("UP")
         else:
             return
@@ -76,7 +82,7 @@ def on_new_candle(pair: str, candle: dict):
             except Exception as e:
                 logger.error("Telegram error: %s", e)
 
-# ——— Socket.IO handlers ———————————————————————————————————
+# ── Socket.IO handlers ──────────────────────────────────────────────────
 @sio.event
 def connect():
     logger.info("🟢 Connected to %s", config.PO_SOCKET_HOST)
@@ -99,16 +105,16 @@ def on_auth(data):
 
 @sio.on("candle")
 def on_candle(msg):
-    instr = msg.get("instrument")
-    if instr in config.OTC_PAIRS and msg.get("timeframe") == 60:
-        on_new_candle(instr, msg.get("candle", {}))
+    inst = msg.get("instrument")
+    if inst in config.OTC_PAIRS and msg.get("timeframe") == 60:
+        on_new_candle(inst, msg.get("candle", {}))
 
-# примем любые args, чтобы не словить TypeError
 @sio.event
 def disconnect(*args):
-    logger.warning("🔴 Disconnected from %s, args=%s", config.PO_SOCKET_HOST, args)
+    logger.warning("🔴 Disconnected from %s, args=%s",
+                   config.PO_SOCKET_HOST, args)
 
-# ——— цикл reconnection —————————————————————————————————————
+# ── Запуск WebSocket в loop с авто-реконнектом ────────────────────────────
 def start_ws():
     url = f"https://{config.PO_SOCKET_HOST}"
     while True:
@@ -134,7 +140,7 @@ def start_ws():
 
 if __name__ == "__main__":
     threading.Thread(target=start_ws, daemon=True).start()
-    logger.info("🤖 Bot is running. Press Ctrl+C to stop.")
+    logger.info("🤖 Bot is running. Ctrl+C to stop.")
     try:
         while True:
             time.sleep(1)
