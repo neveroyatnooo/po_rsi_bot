@@ -10,14 +10,13 @@ from ta.momentum import RSIIndicator
 from telegram import Bot
 import socketio
 import requests
-
 import config
 
-# Отключаем предупреждения про незаверенный SSL
+# отключаем warnings про незаверенный SSL
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Настройка логов
+# ————————————————— логирование ——————————————————————————————
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -25,17 +24,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger()
 
-# Инициализируем Telegram-бота
+# ————————————————— Telegram ———————————————————————————————
 bot = Bot(token=config.TELEGRAM_TOKEN)
 
-# Готовим HTTP-сессию (если понадобится polling fallback)
+# ————————————————— HTTP-сессия (для polling fallback, если надо) ——————
 session = requests.Session()
 session.verify = False
 
-# Создаем Socket.IO-клиент (без передачи transports в конструктор)
+# ————————————————— Socket.IO клиент (ни в конструкторе не передаём transports) —
 sio = socketio.Client(http_session=session)
 
-# Храним историю свечей и уже отправленные сигналы
+# ————————————————— Стратегия ——————————————————————————————
 hist = {pair: deque(maxlen=100) for pair in config.OTC_PAIRS}
 sent_signals = set()
 
@@ -54,10 +53,10 @@ def on_new_candle(pair: str, candle: dict):
     df = pd.DataFrame(dq)
     dirs = []
     for p in config.RSI_PERIODS:
-        rsi = RSIIndicator(df["close"], window=p).rsi().iloc[-1]
-        if rsi > config.RSI_UPPER:
+        val = RSIIndicator(df["close"], window=p).rsi().iloc[-1]
+        if val > config.RSI_UPPER:
             dirs.append("DOWN")
-        elif rsi < config.RSI_LOWER:
+        elif val < config.RSI_LOWER:
             dirs.append("UP")
         else:
             return
@@ -75,8 +74,7 @@ def on_new_candle(pair: str, candle: dict):
             except Exception as e:
                 logger.error("Telegram error: %s", e)
 
-# --- Socket.IO handlers ---
-
+# ————————————————— Socket.IO handlers —————————————————————————
 @sio.event
 def connect():
     logger.info("🟢 Connected to %s via WebSocket", config.PO_SOCKET_HOST)
@@ -99,28 +97,33 @@ def on_auth(data):
 
 @sio.on("candle")
 def on_candle(msg):
-    inst = msg.get("instrument")
-    if inst in config.OTC_PAIRS and msg.get("timeframe") == 60:
-        on_new_candle(inst, msg.get("candle", {}))
+    instr = msg.get("instrument")
+    if instr in config.OTC_PAIRS and msg.get("timeframe") == 60:
+        on_new_candle(instr, msg.get("candle", {}))
 
 @sio.event
 def disconnect():
     logger.warning("🔴 Disconnected from PO")
 
-# Запуск WebSocket-соединения с указанием транспорта только при connect()
+# ————————————————— Запуск WebSocket-соединения —————————————————
 def start_ws():
     url = f"https://{config.PO_SOCKET_HOST}"
-    sio.connect(
-        url,
-        transports=["websocket"],
-        headers={"Origin": "https://pocketoption.com"},
-        socketio_path=config.PO_SOCKET_PATH
-    )
+    try:
+        sio.connect(
+            url,
+            transports=["websocket"],                      # пока only WS
+            headers={"Origin": "https://pocketoption.com"},
+            socketio_path=config.PO_SOCKET_PATH,
+            wait_timeout=20                                # ждём handshake до 20 с
+        )
+    except Exception as e:
+        logger.error("Connection error: %s", e)
+        return
     sio.wait()
 
 if __name__ == "__main__":
     threading.Thread(target=start_ws, daemon=True).start()
-    logger.info("🤖 Bot is running. Press Ctrl+C to stop.")
+    logger.info("🤖 Bot running. Press Ctrl+C to exit.")
     try:
         while True:
             time.sleep(1)
